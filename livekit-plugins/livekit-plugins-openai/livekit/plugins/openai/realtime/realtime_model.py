@@ -135,8 +135,10 @@ _MOCK_AUDIO_ID_PREFIX = "lk_mock_audio_item_"
 # default values got from a "default" session from their API
 DEFAULT_TEMPERATURE = 0.8
 DEFAULT_TURN_DETECTION = TurnDetection(
-    type="semantic_vad",
-    eagerness="auto",
+    type="server_vad",
+    threshold=0.5,
+    prefix_padding_ms=300,
+    silence_duration_ms=200,
     create_response=True,
     interrupt_response=True,
 )
@@ -619,6 +621,8 @@ class RealtimeSession(
                     elif event["type"] == "error":
                         self._handle_error(ErrorEvent.construct(**event))
                 except Exception:
+                    if event["type"] == "response.audio.delta":
+                        event["delta"] = event["delta"][:10] + "..."
                     logger.exception("failed to handle event", extra={"event": event})
 
         tasks = [
@@ -942,7 +946,13 @@ class RealtimeSession(
 
         if handle := self._response_created_futures.pop(response_id, None):
             generation_ev.user_initiated = True
-            handle.done_fut.set_result(generation_ev)
+            try:
+                handle.done_fut.set_result(generation_ev)
+            except asyncio.InvalidStateError:
+                # in case the generation comes after the reply timeout
+                logger.warning(
+                    "response received after timeout", extra={"response_id": response_id}
+                )
 
         self.emit("generation_created", generation_ev)
 
